@@ -990,6 +990,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
   // active RunHandles for message injection into running agent sessions
   const runHandles = new Map<string, RunHandle>();
+  // model the live run is on, so a message sent with a different pick can switch it
+  const runModels = new Map<string, string>();
   type RunReplyRef = {
     sessionId: string;
     source: string;
@@ -2620,7 +2622,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           canUseTool: makeCanUseTool(channel, messageMetadata?.chatId, sessionKey),
           abortController,
           messageMetadata,
-          onRunReady: (handle) => { runHandles.set(sessionKey, handle); },
+          onRunReady: (handle) => { runHandles.set(sessionKey, handle); runModels.set(sessionKey, runConfig.model); },
           lastPulseAt,
           hooks: {
             PreCompact: [{ hooks: [async () => {
@@ -3336,6 +3338,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         activeRunChannels.delete(sessionKey);
         activeRunSources.delete(sessionKey);
         runHandles.delete(sessionKey);
+        runModels.delete(sessionKey);
         // clean up any remaining channel context (typing indicator, status message)
         const ctx = channelRunContexts.get(sessionKey);
         if (ctx) {
@@ -3534,6 +3537,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // try injection into active run first
           const handle = runHandles.get(sessionKey);
           if (handle?.active) {
+            // the pick applies from this message on, even mid-run
+            if (requestedModel && handle.setModel && runModels.get(sessionKey) !== requestedModel) {
+              try {
+                await handle.setModel(requestedModel);
+                runModels.set(sessionKey, requestedModel);
+              } catch (err) {
+                console.error(`[gateway] setModel on inject failed for ${sessionKey}:`, err);
+              }
+            }
             handle.inject(prompt, images, inputItems);
             // record injected user message in session (CLI doesn't echo user text back)
             const injectedContent: Array<Record<string, unknown>> = [];
@@ -3595,6 +3607,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!h?.active) return { id, error: 'no active run for that session' };
           if (!h.setModel) return { id, error: 'setModel not supported by current provider' };
           await h.setModel(model);
+          runModels.set(sk, model);
           return { id, result: { model, sessionKey: sk } };
         }
 
