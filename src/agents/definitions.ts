@@ -122,6 +122,7 @@ const MODEL_MAP: Record<string, 'sonnet' | 'opus' | 'haiku' | 'inherit'> = {
   'claude-sonnet-5': 'sonnet',
   'claude-sonnet-4-6': 'sonnet',
   'claude-opus-4-6': 'opus',
+  'claude-haiku-5-5': 'haiku',
   'claude-haiku-4-5': 'haiku',
   'sonnet': 'sonnet',
   'opus': 'opus',
