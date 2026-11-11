@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ContextUsage } from '@/hooks/useGateway';
+import type { ContextUsage, PlanUsage } from '@/hooks/useGateway';
 
 // deferred rows are out-of-window tool schemas the SDK excludes from usage math,
 // and these two are window accounting rather than content — none belong in the
@@ -7,6 +7,14 @@ import type { ContextUsage } from '@/hooks/useGateway';
 const NON_CONTENT = new Set(['Free space', 'Autocompact buffer']);
 
 const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
+
+const barColor = (pct: number) => pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-muted-foreground';
+
+function resetLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return 'resets ' + d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+}
 
 function ring(pct: number) {
   if (pct >= 90) return 'stroke-red-500';
@@ -16,6 +24,7 @@ function ring(pct: number) {
 
 type Props = {
   getContextUsage: (sessionKey: string, detail?: 'summary' | 'full') => Promise<ContextUsage>;
+  getPlanUsage?: (force?: boolean) => Promise<PlanUsage | null>;
   sessionKey: string | undefined;
   isRunning: boolean;
 };
@@ -25,10 +34,23 @@ type Props = {
  * only answers while a run is active — we poll during a run and keep showing the
  * last good reading once it ends rather than blanking out.
  */
-export function ContextWheel({ getContextUsage, sessionKey, isRunning }: Props) {
+export function ContextWheel({ getContextUsage, getPlanUsage, sessionKey, isRunning }: Props) {
   const [usage, setUsage] = useState<ContextUsage | null>(null);
   const [open, setOpen] = useState(false);
   const inFlight = useRef(false);
+  const [plan, setPlan] = useState<PlanUsage | null>(null);
+
+  // plan usage is account-wide and cached 5 min in the gateway; poll lightly
+  const refreshPlan = useCallback(async () => {
+    if (!getPlanUsage) return;
+    try { setPlan(await getPlanUsage()); } catch { /* keep last reading */ }
+  }, [getPlanUsage]);
+
+  useEffect(() => {
+    refreshPlan();
+    const t = setInterval(refreshPlan, 5 * 60_000);
+    return () => clearInterval(t);
+  }, [refreshPlan]);
 
   const refresh = useCallback(async () => {
     if (!sessionKey || inFlight.current) return;
@@ -65,7 +87,7 @@ export function ContextWheel({ getContextUsage, sessionKey, isRunning }: Props) 
   const servers = [...byServer.entries()].sort((a, b) => b[1] - a[1]);
 
   return (
-    <div className="relative ml-1" onMouseEnter={() => { setOpen(true); refresh(); }} onMouseLeave={() => setOpen(false)}>
+    <div className="relative ml-1" onMouseEnter={() => { setOpen(true); refresh(); refreshPlan(); }} onMouseLeave={() => setOpen(false)}>
       <button
         type="button"
         className="h-8 w-8 p-0 rounded-lg inline-flex items-center justify-center hover:bg-accent transition-colors"
@@ -111,6 +133,23 @@ export function ContextWheel({ getContextUsage, sessionKey, isRunning }: Props) 
                 <div key={name} className="flex justify-between py-0.5 text-muted-foreground">
                   <span className="truncate pr-2">{name}</span>
                   <span className="tabular-nums shrink-0">{fmt(tokens)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {plan && plan.windows.length > 0 && (
+            <div className="mt-2 pt-2 border-t">
+              <div className="text-muted-foreground/70 mb-1">plan usage{plan.subscription ? ` (${plan.subscription})` : ''}</div>
+              {plan.windows.map(w => (
+                <div key={w.label} className="py-0.5">
+                  <div className="flex justify-between text-muted-foreground">
+                    <span className="truncate pr-2">{w.label}</span>
+                    <span className="tabular-nums shrink-0">{w.utilization}%{w.resetsAt ? ` · ${resetLabel(w.resetsAt)}` : ''}</span>
+                  </div>
+                  <div className="h-0.5 rounded-full bg-border overflow-hidden mt-0.5">
+                    <div className={`h-full ${barColor(w.utilization)}`} style={{ width: `${Math.min(w.utilization, 100)}%` }} />
+                  </div>
                 </div>
               ))}
             </div>

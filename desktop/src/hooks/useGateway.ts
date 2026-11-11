@@ -35,6 +35,8 @@ const TOOL_PENDING_TEXT: Record<string, string> = {
 
 export type ConnectionState = 'connecting' | 'connected' | 'degraded' | 'disconnected';
 
+export type PlanUsage = { subscription: string | null; windows: { label: string; utilization: number; resetsAt: string | null }[]; fetchedAt: number };
+
 export type ContextUsageCategory = { name: string; tokens: number; isDeferred?: boolean };
 
 /**
@@ -2447,6 +2449,10 @@ export function useGateway() {
     // the breakdown is read out of the running CLI process, not the transcript.
     getContextUsage: useCallback(async (sessionKey: string, detail: 'summary' | 'full' = 'summary') => {
       return rpc('agent.contextUsage', { sessionKey, detail }) as Promise<ContextUsage>;
+    }, [rpc]),
+    // R2 fork: Claude plan utilization (weekly limits). null when unavailable.
+    getPlanUsage: useCallback(async (force = false) => {
+      return rpc('account.planUsage', { force }) as Promise<PlanUsage | null>;
     }, [rpc]),
     // Kill one background task. This is the affordance that makes
     // perTaskStopAffordance safe: interrupt spares background work, so there has

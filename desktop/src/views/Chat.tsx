@@ -2185,7 +2185,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               <Paperclip className="w-4 h-4 text-muted-foreground" />
             </Button>
             <ModelSelector gateway={gateway} disabled={!connected} sessionId={activeState?.sessionId} sessionKey={sessionKey} />
-            <ContextWheel getContextUsage={gateway.getContextUsage} sessionKey={sessionKey} isRunning={isRunning} />
+            <ContextWheel getContextUsage={gateway.getContextUsage} getPlanUsage={gateway.getPlanUsage} sessionKey={sessionKey} isRunning={isRunning} />
             {input.trim() && (
               <span className="text-[9px] text-muted-foreground/60 ml-2 select-none hidden @sm:inline">{'\u21E7\u21B5 new line'}</span>
             )}

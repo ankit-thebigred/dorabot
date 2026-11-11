@@ -209,10 +209,24 @@ function setupAutoUpdater(): void {
   }
 }
 
-function getIconPath(): string {
+function getIconPath(variant: '' | '-live' | '-offline' = ''): string {
   return is.dev
-    ? path.join(__dirname, '../../public/dorabot.png')
-    : path.join(__dirname, '../renderer/dorabot.png');
+    ? path.join(__dirname, `../../public/r2${variant}.png`)
+    : path.join(__dirname, `../renderer/r2${variant}.png`);
+}
+
+// R2 fork: Dock status dot. Grey until the first successful connection, green
+// while connected and signed in, red when the gateway drops or Claude sign-in
+// needs renewing. Transitional bridge states keep the last colour to avoid flicker.
+let gatewayUp: boolean | null = null;
+let claudeAuthOk = true;
+let dockVariant: string | null = null;
+function refreshDockIcon(): void {
+  if (!app.dock || gatewayUp === null) return;
+  const v = gatewayUp && claudeAuthOk ? '-live' : '-offline';
+  if (v === dockVariant) return;
+  dockVariant = v;
+  try { app.dock.setIcon(getIconPath(v)); } catch {}
 }
 
 function showAppNotification(title: string, body: string): void {
@@ -364,6 +378,28 @@ app.on('ready', async () => {
 
   // Create gateway bridge (main process WebSocket to gateway)
   gatewayBridge = new GatewayBridge();
+  gatewayBridge.onState = (state) => {
+    if (state === 'authenticated') gatewayUp = true;
+    else if (state === 'disconnected' && gatewayUp !== null) gatewayUp = false;
+    refreshDockIcon();
+  };
+  gatewayBridge.onEvent = (event) => {
+    if (event === 'provider.auth_required' || event === 'auth.reauth_required') claudeAuthOk = false;
+    else if (event === 'provider.auth_complete') claudeAuthOk = true;
+    else return;
+    refreshDockIcon();
+  };
+  // While red for sign-in, re-check once a minute: the gateway can recover the
+  // token in the background without broadcasting auth_complete.
+  setInterval(async () => {
+    if (claudeAuthOk || !gatewayUp || !gatewayBridge) return;
+    try {
+      const st = await gatewayBridge.call('provider.auth.status');
+      if (st?.authenticated) { claudeAuthOk = true; refreshDockIcon(); }
+    } catch {}
+  }, 60_000);
+  // A gateway that never comes up at launch should read as offline, not "off".
+  setTimeout(() => { if (gatewayUp === null) { gatewayUp = false; refreshDockIcon(); } }, 45_000);
 
   // IPC: renderer sends messages through the bridge
   ipcMain.on('gateway:send', (_event, data: string) => {

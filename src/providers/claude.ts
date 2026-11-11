@@ -1154,3 +1154,104 @@ export class ClaudeProvider implements Provider {
     return { result, sessionId, usage };
   }
 }
+
+// ── Plan usage (R2 fork) ────────────────────────────────────────────
+// Account-level Claude plan utilization for the context popover. Read-only and
+// free (no model call). Primary source: the claude.ai OAuth usage endpoint with
+// dorabot's own token (the CLI skips its account lookup when the token comes in
+// through the env, so the SDK route returns nothing for dorabot_oauth). Fallback:
+// the SDK's experimental /usage call, for CLI-keychain auth. Both are
+// unofficial, so any failure returns null and the UI hides the section.
+
+export type PlanUsageWindow = { label: string; utilization: number; resetsAt: string | null };
+export type PlanUsage = { subscription: string | null; windows: PlanUsageWindow[]; fetchedAt: number };
+
+const PLAN_USAGE_TTL_MS = 5 * 60_000;
+const OAUTH_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+let planUsageCache: PlanUsage | null = null;
+let planUsageInFlight: Promise<PlanUsage | null> | null = null;
+
+function windowsFromUsage(r: any): PlanUsageWindow[] {
+  const out: PlanUsageWindow[] = [];
+  const add = (label: string, pct: unknown, resetsAt: unknown) => {
+    if (typeof pct === 'number') out.push({ label, utilization: Math.round(pct), resetsAt: typeof resetsAt === 'string' ? resetsAt : null });
+  };
+  if (Array.isArray(r?.limits) && r.limits.length) {
+    for (const l of r.limits) {
+      if (l?.kind === 'weekly_all') add('Weekly, all models', l.percent, l.resets_at);
+      else if (l?.kind === 'weekly_scoped') add(l.scope?.model?.display_name || 'Model', l.percent, l.resets_at);
+      else if (l?.kind === 'five_hour') add('5-hour', l.percent, l.resets_at);
+    }
+    if (out.length) return out;
+  }
+  const w = (label: string, x: any) => x && add(label, x.utilization, x.resets_at);
+  w('Weekly, all models', r?.seven_day);
+  w('Opus', r?.seven_day_opus);
+  w('Sonnet', r?.seven_day_sonnet);
+  if (r?.model_scoped) w(r.model_scoped.display_name || 'Model', r.model_scoped);
+  w('5-hour', r?.five_hour);
+  return out;
+}
+
+async function planUsageFromEndpoint(token: string): Promise<PlanUsageWindow[] | null> {
+  const res = await fetch(OAUTH_USAGE_URL, {
+    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) return null;
+  const w = windowsFromUsage(await res.json());
+  return w.length ? w : null;
+}
+
+async function planUsageFromSdk(env: Record<string, string>): Promise<{ sub: string | null; windows: PlanUsageWindow[] } | null> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), 20_000);
+  try {
+    // streaming-input mode with a prompt that never yields: no user message, no tokens
+    const idle = async function* (): AsyncGenerator<never> {
+      await new Promise<void>(resolve => abortController.signal.addEventListener('abort', () => resolve(), { once: true }));
+    };
+    const q: any = query({ prompt: idle(), options: { abortController, env, allowedTools: [] } });
+    const fn = q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (typeof fn !== 'function') return null;
+    const r = await fn.call(q, { skipBehaviors: true });
+    if (!r?.rate_limits_available || !r.rate_limits) return null;
+    const windows = windowsFromUsage(r.rate_limits);
+    return windows.length ? { sub: r.subscription_type ?? null, windows } : null;
+  } finally {
+    clearTimeout(timeout);
+    abortController.abort();
+  }
+}
+
+export async function getPlanUsage(force = false): Promise<PlanUsage | null> {
+  if (!force && planUsageCache && Date.now() - planUsageCache.fetchedAt < PLAN_USAGE_TTL_MS) return planUsageCache;
+  if (planUsageInFlight) return planUsageInFlight;
+  planUsageInFlight = (async () => {
+    try {
+      const method = getActiveAuthMethod();
+      if (method === 'api_key' || method === 'none') return null;
+      let windows: PlanUsageWindow[] | null = null;
+      let sub: string | null = null;
+      if (method === 'dorabot_oauth') {
+        const token = await ensureOAuthToken();
+        if (token) windows = await planUsageFromEndpoint(token).catch(() => null);
+      }
+      if (!windows) {
+        const env = cleanEnvForSdk();
+        applyAuthEnv(env, method, method === 'dorabot_oauth' ? await ensureOAuthToken() : null);
+        const r = await planUsageFromSdk(env).catch(() => null);
+        if (r) { windows = r.windows; sub = r.sub; }
+      }
+      if (!windows) return null;
+      planUsageCache = { subscription: sub, windows, fetchedAt: Date.now() };
+      return planUsageCache;
+    } catch (err) {
+      console.warn('[claude] plan usage unavailable:', err instanceof Error ? err.message : String(err));
+      return null;
+    } finally {
+      planUsageInFlight = null;
+    }
+  })();
+  return planUsageInFlight;
+}

@@ -55,7 +55,7 @@ import {
 } from '../tools/tasks.js';
 import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nextId as nextResearchId, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
-import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired } from '../providers/claude.js';
+import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, onClaudeAuthRequired, getPlanUsage } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired, getCodexModelCatalog, getCodexAppServerSnapshot, callCodexAppServer, closeCodexAppServerRpcClient } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
 import { buildProviderAuthGate, classifyAuthRecovery, type ProviderAuthGate } from './auth-state.js';
@@ -6873,6 +6873,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
+        }
+
+        case 'account.planUsage': {
+          // R2 fork: account-level plan utilization, null when unavailable (API key, experimental API changed)
+          const usage = await getPlanUsage(params?.force === true);
+          return { id, result: usage };
         }
 
         case 'query.supportedModels': {

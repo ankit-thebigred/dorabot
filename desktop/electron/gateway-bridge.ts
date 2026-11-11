@@ -38,6 +38,9 @@ export type BridgeState = 'connecting' | 'connected' | 'authenticated' | 'degrad
 export class GatewayBridge {
   private ws: WebSocket | null = null;
   private state: BridgeState = 'disconnected';
+  // R2 fork: lets main drive the live/offline Dock icon
+  onState?: (state: BridgeState) => void;
+  onEvent?: (event: string) => void;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatPending = false;
@@ -143,6 +146,7 @@ export class GatewayBridge {
       // Check if this is an auth response (handle internally)
       try {
         const msg = JSON.parse(data);
+        if (msg && typeof msg.event === 'string') this.onEvent?.(msg.event);
         if (msg && msg.id != null && this.pendingRpc.has(msg.id)) {
           const pending = this.pendingRpc.get(msg.id)!;
           this.pendingRpc.delete(msg.id);
@@ -291,6 +295,17 @@ export class GatewayBridge {
     }, HEARTBEAT_INTERVAL_MS);
   }
 
+  /** R2 fork: small RPC helper for main-process status checks. */
+  call(method: string, params?: Record<string, unknown>, timeoutMs = 10_000): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) { reject(new Error('not connected')); return; }
+      const id = ++this.rpcId;
+      const timer = setTimeout(() => { this.pendingRpc.delete(id); reject(new Error('timeout')); }, timeoutMs);
+      this.pendingRpc.set(id, { resolve, reject, timer });
+      this.ws.send(JSON.stringify({ method, params, id }));
+    });
+  }
+
   private stopHeartbeat(): void {
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer);
@@ -344,6 +359,7 @@ export class GatewayBridge {
   private setState(state: BridgeState, reason?: string, reconnectInMs?: number): void {
     this.state = state;
     if (reason) this.lastReason = reason;
+    this.onState?.(state);
     this.sendToRenderer('gateway:state', {
       state,
       reason,
