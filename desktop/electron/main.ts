@@ -111,8 +111,8 @@ if (!gotSingleInstanceLock) {
 }
 
 // --- Auto-updater setup ---
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.autoDownload = false; // R2 fork: never pull upstream builds over this one
+autoUpdater.autoInstallOnAppQuit = false;
 
 const UPDATER_LOG_PATH = path.join(DORABOT_LOGS_DIR, 'updater.log');
 
@@ -203,7 +203,7 @@ function setupAutoUpdater(): void {
   });
 
   // Check for updates 10s after launch, then every 30 minutes
-  if (!is.dev) {
+  if (!is.dev && process.env.R2_ENABLE_UPDATES === "1") {
     setTimeout(() => autoUpdater.checkForUpdates().catch((e) => ulog(`Initial check failed: ${e.message}`)), 10_000);
     updateCheckInterval = setInterval(() => autoUpdater.checkForUpdates().catch((e) => ulog(`Periodic check failed: ${e.message}`)), 30 * 60 * 1000);
   }
@@ -321,7 +321,7 @@ function createTray(): void {
   const icon = nativeImage.createFromPath(getIconPath()).resize({ width: 18, height: 18 });
 
   tray = new Tray(icon);
-  tray.setToolTip('dorabot');
+  tray.setToolTip('R2');
   updateTrayTitle('idle');
 
   const contextMenu = Menu.buildFromTemplate([
@@ -421,7 +421,7 @@ app.on('ready', async () => {
     }
   });
   ipcMain.on('notify', (_event, payload: { title?: string; body?: string } | undefined) => {
-    const title = payload?.title?.trim() || 'dorabot';
+    const title = payload?.title?.trim() || 'R2';
     const body = payload?.body?.trim() || '';
     if (!body) return;
     showAppNotification(title, body);
